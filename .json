@@ -1,0 +1,69 @@
+{
+  "id": "MarketAnalysisGraph",
+  "nodes": [
+    {
+      "id": "input_asset",
+      "type": "input",
+      "description": "Nodo para recibir la moneda/divisa/país/materia prima a analizar"
+    },
+    {
+      "id": "validate_asset",
+      "type": "validation",
+      "description": "Valida que el activo sea correcto"
+    },
+    {
+      "id": "search_serpei",
+      "type": "tool",
+      "tool_name": "SerpeiAPI",
+      "description": "Busca noticias usando Serpei API"
+    },
+    {
+      "id": "search_alpha",
+      "type": "tool",
+      "tool_name": "AlphaVintageAPI",
+      "description": "Busca noticias usando Alpha Vintage"
+    },
+    {
+      "id": "summarize_news",
+      "type": "transform",
+      "description": "Resume y unifica noticias obtenidas"
+    },
+    {
+      "id": "check_sufficiency",
+      "type": "logic",
+      "description": "Determina si la información es suficiente para tendencias",
+      "params": {
+        "max_iterations": 3
+      }
+    },
+    {
+      "id": "analyze_trends",
+      "type": "transform",
+      "description": "Analiza tendencias a corto y largo plazo de cada noticia"
+    },
+    {
+      "id": "aggregate_trends",
+      "type": "transform",
+      "description": "Genera un informe final de tendencias a partir de todos los análisis"
+    },
+    {
+      "id": "output_result",
+      "type": "output",
+      "description": "Devuelve la información final al usuario"
+    }
+  ],
+  "edges": [
+    { "source": "input_asset",   "target": "validate_asset" },
+    { "source": "validate_asset","target": "search_serpei", "condition": "is_valid == true" },
+    { "source": "validate_asset","target": "input_asset",   "condition": "is_valid == false" },
+    { "source": "search_serpei", "target": "search_alpha" },
+    { "source": "search_alpha",  "target": "summarize_news" },
+    { "source": "summarize_news","target": "check_sufficiency" },
+    { "source": "check_sufficiency","target": "search_serpei", "condition": "insufficient && iteration < 3" },
+    { "source": "check_sufficiency","target": "output_result", "condition": "insufficient && iteration == 3" },
+    { "source": "check_sufficiency","target": "analyze_trends", "condition": "sufficient == true" },
+    { "source": "analyze_trends", "target": "aggregate_trends" },
+    { "source": "aggregate_trends","target": "output_result" }
+  ]
+}
+

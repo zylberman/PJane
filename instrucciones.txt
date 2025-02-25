@@ -1,0 +1,13 @@
+# Iniciar Docker
+## Lista de contenedores disponibles
+docker ps 
+## Activar contenedor en segundo plano
+docker compose up -d
+## Ingresar al contenedor
+docker exec -it <CONTENEDOR> /bin/bash 
+
+# Listar estrategias
+freqtrade list-strategies
+# Ejecutar backtesting con un tiempo anterior 
+freqtrade backtesting --strategy PJStrategy --timerange 20240101-20240301
+
