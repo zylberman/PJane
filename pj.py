@@ -4,11 +4,12 @@
 # --- Do not remove these imports ---
 import numpy as np
 import pandas as pd
-import app
 from datetime import datetime, timedelta, timezone
 from pandas import DataFrame
 from typing import Optional, Union
-
+#------------------------------------
+import random
+#------------------------------------
 from freqtrade.strategy import (
     IStrategy,
     Trade,
@@ -129,19 +130,6 @@ class PJStrategy(IStrategy):
         },
     }
 
-    def get_market_trend(self, pair: str) -> str:
-        """
-        Obtiene la tendencia del mercado desde app.py
-        """
-        date = datetime.now().strftime("%Y-%m-%d")
-        query = pair
-        try:
-            response = app.obtener_sentimiento(query, date)
-            return response["tendencia"]
-        except Exception as e:
-            print("Error en la lectura: ",e)
-            return "⚖ Neutral"
-        
     def informative_pairs(self):
         """
         Define additional, informative pair/interval combinations to be cached from the exchange.
@@ -155,18 +143,68 @@ class PJStrategy(IStrategy):
         """
         return []
 
+    # ------------------------------------
+    def get_trend_for_block(self, first_date, first_value) -> str:
+        """
+        Calcula la tendencia de un bloque de 16 horas usando el primer valor del bloque.
+
+        :param first_date: Fecha del primer valor del bloque
+        :param first_value: Primer valor del bloque (puede ser precio, RSI, volumen, etc.)
+        :return: 'positive', 'negative' o 'neutral' (valor de tendencia)
+        """
+        print(f"📌 Fecha del primer dato del bloque: {first_date}, Valor: {first_value}")
+
+        trend_options = ['positive', 'negative', 'neutral']
+        tendencia = random.choice(trend_options)  # Aquí puedes cambiar la lógica si necesitas algo más específico
+
+        return tendencia
+
+    # ------------------------------------
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        Adds several different TA indicators to the given DataFrame
+        Adds several different TA indicators to the given DataFrame.
 
-        Performance Note: For the best performance be frugal on the number of indicators
-        you are using. Let uncomment only the indicator you are using in your strategies
-        or your hyperopt configuration, otherwise you will waste your memory and CPU usage.
-        :param dataframe: Dataframe with data from the exchange
-        :param metadata: Additional information, like the currently traded pair
-        :return: a Dataframe with all mandatory indicators for the strategies
+        :param dataframe: Dataframe with data from the exchange.
+        :param metadata: Additional information, like the currently traded pair.
+        :return: A DataFrame with all mandatory indicators for the strategies.
         """
 
+        print("🔍 DataFrame antes de agregar indicadores:")
+        print(dataframe.head(5))  # Muestra las primeras 5 filas para ver el formato de la fecha
+
+        # Asegurar que la columna 'date' esté en formato datetime
+        if 'date' in dataframe.columns:
+            dataframe['date'] = pd.to_datetime(dataframe['date'], errors='coerce')
+
+        # Determinar cuántas líneas equivalen a 16 horas
+        timeframe_minutes = timeframe_to_minutes(self.timeframe)  # p. ej. 5 si el timeframe es "5m"
+        rows_per_16h = (16 * 60) // timeframe_minutes  # p. ej. 16*60 / 5 = 192 filas
+
+        # Crear la columna 'trend' con valores vacíos (NaN)
+        dataframe['trend'] = None
+
+        # Asignar tendencias en bloques de 16 horas
+        total_filas = len(dataframe)
+        for start in range(0, total_filas, rows_per_16h):
+            end = min(start + rows_per_16h, total_filas)  # Evita pasarnos del límite
+
+            # ✅ Obtener la fecha y el primer valor del bloque
+            first_date = dataframe.iloc[start]['date']
+            first_value = dataframe.iloc[start]['close']  # O 'rsi' si prefieres
+
+            # ✅ Calcular la tendencia basada en el primer valor del bloque y su fecha
+            tendencia = self.get_trend_for_block(first_date, first_value)
+
+            # ✅ Asignar la tendencia al bloque
+            dataframe.loc[start:end-1, 'trend'] = tendencia
+
+        # ✅ Mostrar los primeros valores de cada bloque
+        for start in range(0, total_filas, rows_per_16h):
+            end = min(start + rows_per_16h, total_filas)
+            print(dataframe.iloc[start:start+3][['date', 'trend']])  # Mostrar las primeras 3 filas de cada bloque
+
+        
+        # ------------------------------------
         # Momentum Indicators
         # ------------------------------------
 
@@ -372,7 +410,7 @@ class PJStrategy(IStrategy):
                 dataframe['best_bid'] = ob['bids'][0][0]
                 dataframe['best_ask'] = ob['asks'][0][0]
         """
-
+        print("🔍 DataFrame después de agregar indicadores:\n", dataframe.iloc[190:200][['date', 'sar', 'tema', 'trend']].head(10))
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -382,7 +420,6 @@ class PJStrategy(IStrategy):
         :param metadata: Additional information, like the currently traded pair
         :return: DataFrame with entry columns populated
         """
-        market_trend = self.get_market_trend(metadata['pair'])
         dataframe.loc[
             (
                 # Signal: RSI crosses above 30
@@ -390,7 +427,6 @@ class PJStrategy(IStrategy):
                 & (dataframe["tema"] <= dataframe["bb_middleband"])  # Guard: tema below BB middle
                 & (dataframe["tema"] > dataframe["tema"].shift(1))  # Guard: tema is raising
                 & (dataframe["volume"] > 0)  # Make sure Volume is not 0
-                & (market_trend == "📈 Positiva") # Solo compra si la tendencia externa es positiva
             ),
             "enter_long",
         ] = 1
@@ -402,8 +438,6 @@ class PJStrategy(IStrategy):
                 & (dataframe["tema"] > dataframe["bb_middleband"])  # Guard: tema above BB middle
                 & (dataframe["tema"] < dataframe["tema"].shift(1))  # Guard: tema is falling
                 & (dataframe["volume"] > 0)  # Make sure Volume is not 0
-                & (market_trend == "📉 Negativa")  # Solo vende si la tendencia externa es negativa
-
             ),
             "enter_short",
         ] = 1
@@ -442,6 +476,3 @@ class PJStrategy(IStrategy):
         ] = 1
 
         return dataframe
-
-# TODO: BTC/USDT lo confunde con BTCUSDT
-# La simulación el código de app.py se ejecuta una sola vez, en lugar de cada 4 horas o cada par. 

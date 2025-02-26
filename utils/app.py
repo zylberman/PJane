@@ -20,13 +20,13 @@ os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 # openai_api_base indica la dirección base del servidor donde corre el modelo
 # openai_api_key se usa para autenticar (aquí es un valor ficticio porque se está usando LM Studio local)
 llm_qwen = ChatOpenAI(
-    openai_api_base="http://localhost:1234/v1",  
+    openai_api_base="http://host.docker.internal:1234/v1",  
     openai_api_key="lm-studio",  
     model_name="qwen2.5-7b-instruct-1m"
 )
 
 llm_deep_seek = ChatOpenAI(
-    openai_api_base="http://localhost:1234/v1",  
+    openai_api_base="http://host.docker.internal:1234/v1",  
     openai_api_key="lm-studio",  
     model_name="deepseek-r1-distill-llama-8b"
 )
@@ -58,7 +58,8 @@ workflow = StateGraph(AgentState)
 # Nodo 1: Valida la entrada de información, que sea un activo, divisa, pais o par de divisas valido
 # ----------
 def validar_activo(state: AgentState) -> AgentState:
-    patron_activo = r"^[A-Z]{6,7}$|^(Bitcoin|Ethereum|Oro|Petróleo|España|EE.UU|China)$"
+    # Expresión regular corregida para aceptar BTCUSDT y BTC/USDT
+    patron_activo = r"^[A-Z]{3,5}/?[A-Z]{3,5}$|^(Bitcoin|Ethereum|Oro|Petróleo|España|EE.UU|China)$"
 
     while True:  # Bucle que repite la solicitud hasta que los datos sean correctos
         query = state.query
@@ -71,10 +72,10 @@ def validar_activo(state: AgentState) -> AgentState:
 
         # Validar fecha
         try:
-            datetime.strptime(date, "%Y-%m-%d")  # Verifica que la fecha tenga el formato correcto
+            datetime.strptime(date, "%Y-%m-%d %H:%M:%S")  # Verifica que la fecha tenga el formato correcto
         except ValueError:
             print(f"❌ Fecha inválida: {date}")
-            date = input("Ingrese una fecha válida en formato YYYY-MM-DD: ").strip()
+            date = input("Ingrese una fecha válida en formato YYYY-MM-DD HH:MM:SS : ").strip()
             continue  # Si la fecha es inválida, vuelve a solicitarla
 
         # Si ambos valores son correctos, salimos del bucle
@@ -269,52 +270,14 @@ def obtener_sentimiento(query: str, date: str) -> dict:
     # Ejecutar el flujo
     result = graph.invoke(initial_state)
 
-    print("\n🔍 Resumen del Sentimiento del Mercado:",result)
-    # Retornar la respuesta final
-    return result["response"]
+    # Acceder a la clave correcta dentro de 'response'
+    if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
+        tendencia = result["response"].get("tendencia", "⚖ Neutral")
+        # 🔍 Asegurar que la impresión no falle si la clave no existe
+        print("Resultado de la tendencia:", tendencia)
+        return {"tendencia": tendencia}  # Devolver un diccionario con la tendencia
+    else:
+        print("⚠ Error: No se encontró 'tendencia' en la respuesta.")
+        print("Resultado de la tendencia: ⚖ Neutral")
+        return {"tendencia": "⚖ Neutral"}  # Valor por defecto en caso de error
 
-# query = "BTCUSDT"
-# result = graph.invoke(AgentState(query=query, date=datetime.now(), response=""))
-# print("\n✅ Respuesta final:", result["response"])
-# Permitir ejecución desde otro script
-if __name__ == "__main__":
-    # Solicitar activo con un valor por defecto
-    query = input("Ingrese el activo a consultar (por defecto BTCUSDT): ").strip()
-    if not query:
-        query = "BTCUSDT"  # Valor por defecto si no se ingresa nada
-
-    # Solicitar fecha con un valor por defecto
-    date = input("Ingrese la fecha en formato YYYY-MM-DD (por defecto hoy): ").strip()
-    if not date:
-        date = datetime.now().strftime("%Y-%m-%d")  # Fecha actual por defecto
-
-    # Validar que la fecha ingresada tenga el formato correcto
-    try:
-        datetime.strptime(date, "%Y-%m-%d")  # Verifica que la fecha sea válida
-    except ValueError:
-        print("❌ Error: La fecha ingresada no es válida. Use el formato YYYY-MM-DD.")
-        exit(1)  # Sale del programa si la fecha es inválida
-    
-    # Ejecutar el flujo con los valores validados
-    resultado = obtener_sentimiento(query, date)
-
-    # Mostrar solo el análisis final en texto
-    print("\n✅ Respuesta final:\n")
-    print(resultado["detalles"])
-
-    # Mostrar la tendencia correctamente
-    print("\n✅ Tendencia:\n")
-    print(resultado["tendencia"])
-
-# Permitir ejecución desde otro script
-"""
-import app
-
-query = "BTCUSDT"
-date = "2025-02-24"  # Puedes cambiarlo a la fecha actual
-
-resultado = app.obtener_sentimiento(query, date)
-
-print("\n🔍 Resumen del Sentimiento del Mercado:")
-print(resultado)
-"""
