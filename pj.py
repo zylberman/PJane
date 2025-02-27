@@ -2,6 +2,7 @@
 # flake8: noqa: F401
 # isort: skip_file
 # --- Do not remove these imports ---
+import os
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ from freqtrade.strategy import (
 # Add your lib to import here
 import talib.abstract as ta
 from technical import qtpylib
+import utils.app as news_analyzer
 
 
 # This class is a sample. Feel free to customize it.
@@ -142,9 +144,9 @@ class PJStrategy(IStrategy):
                             ]
         """
         return []
-
     # ------------------------------------
-    def get_trend_for_block(self, first_date, first_value) -> str:
+
+    def get_trend_for_block(self, first_date, first_value, metadata) -> str:
         """
         Calcula la tendencia de un bloque de 16 horas usando el primer valor del bloque.
 
@@ -152,7 +154,20 @@ class PJStrategy(IStrategy):
         :param first_value: Primer valor del bloque (puede ser precio, RSI, volumen, etc.)
         :return: 'positive', 'negative' o 'neutral' (valor de tendencia)
         """
+
+
+        # Convertir first_date a string
+        first_date_str = first_date.strftime('%Y-%m-%d %H:%M:%S')
+
+        news_analyzer.decir_hola()
+
+        # Obtener la divisa automáticamente desde `metadata`
+        currency_pair = metadata.get("pair", "BTC/USDT")  # Si no está definido, usa BTC/USDT por defecto
+
+        trend = news_analyzer.obtener_sentimiento(currency_pair, first_date_str)
+
         print(f"📌 Fecha del primer dato del bloque: {first_date}, Valor: {first_value}")
+        print(f"La tendecia determinada por el analizador es : {trend}")
 
         trend_options = ['positive', 'negative', 'neutral']
         tendencia = random.choice(trend_options)  # Aquí puedes cambiar la lógica si necesitas algo más específico
@@ -170,21 +185,55 @@ class PJStrategy(IStrategy):
         """
 
         print("🔍 DataFrame antes de agregar indicadores:")
-        print(dataframe.head(5))  # Muestra las primeras 5 filas para ver el formato de la fecha
+        print(dataframe.head(3))  # Muestra las primeras 5 filas para ver el formato de la fecha
 
         # Asegurar que la columna 'date' esté en formato datetime
         if 'date' in dataframe.columns:
             dataframe['date'] = pd.to_datetime(dataframe['date'], errors='coerce')
 
-        # Determinar cuántas líneas equivalen a 16 horas
-        timeframe_minutes = timeframe_to_minutes(self.timeframe)  # p. ej. 5 si el timeframe es "5m"
-        rows_per_16h = (16 * 60) // timeframe_minutes  # p. ej. 16*60 / 5 = 192 filas
+        # **Hacer que el tamaño del bloque sea configurable**
+        trend_block_hours = 16  # ⬅️ Tamaño del bloque en horas
+        timeframe_minutes = timeframe_to_minutes(self.timeframe)  
+        rows_per_block = (trend_block_hours * 60) // timeframe_minutes  # Conversión a filas
 
         # Crear la columna 'trend' con valores vacíos (NaN)
         dataframe['trend'] = None
 
-        # Asignar tendencias en bloques de 16 horas
-        total_filas = len(dataframe)
+        # Nombre del archivo de caché basado en el par de trading
+        cache_filename = f"trend_cache_{metadata['pair'].replace('/', '_')}.csv"
+
+        # Si el archivo de caché existe, cargar 'trend' desde allí
+        if os.path.exists(cache_filename):
+            print(f"🔄 Cargando datos de tendencia desde {cache_filename}...")
+            trend_cache = pd.read_csv(cache_filename, parse_dates=["date"])  # Cargar cache
+            dataframe = dataframe.merge(trend_cache, on="date", how="left")  # Combinar con el DataFrame principal
+
+        else:
+            print("⚡ Calculando tendencias desde cero...")
+
+            # Asegurar que la columna 'date' está en formato datetime
+            if "date" in dataframe.columns:
+                dataframe["date"] = pd.to_datetime(dataframe["date"], errors="coerce")
+
+            # Crear la columna 'trend' vacía
+            dataframe["trend"] = None
+
+            # Asignar tendencias en bloques configurables
+            total_filas = len(dataframe)
+            for start in range(0, total_filas, rows_per_block):
+                end = min(start + rows_per_block, total_filas)
+
+                first_date = dataframe.iloc[start]["date"]
+                first_value = dataframe.iloc[start]["close"]
+
+                tendencia = self.get_trend_for_block(first_date, first_value, metadata)
+                dataframe.loc[start:end - 1, "trend"] = tendencia
+
+            # Guardar los datos calculados en un archivo CSV
+            dataframe[["date", "trend"]].to_csv(cache_filename, index=False)
+            print(f"✅ Datos de tendencia guardados en {cache_filename} para futuras ejecuciones.")
+    
+        '''' 
         for start in range(0, total_filas, rows_per_16h):
             end = min(start + rows_per_16h, total_filas)  # Evita pasarnos del límite
 
@@ -193,7 +242,7 @@ class PJStrategy(IStrategy):
             first_value = dataframe.iloc[start]['close']  # O 'rsi' si prefieres
 
             # ✅ Calcular la tendencia basada en el primer valor del bloque y su fecha
-            tendencia = self.get_trend_for_block(first_date, first_value)
+            tendencia = self.get_trend_for_block(first_date, first_value, metadata)
 
             # ✅ Asignar la tendencia al bloque
             dataframe.loc[start:end-1, 'trend'] = tendencia
@@ -201,8 +250,8 @@ class PJStrategy(IStrategy):
         # ✅ Mostrar los primeros valores de cada bloque
         for start in range(0, total_filas, rows_per_16h):
             end = min(start + rows_per_16h, total_filas)
-            print(dataframe.iloc[start:start+3][['date', 'trend']])  # Mostrar las primeras 3 filas de cada bloque
-
+            print(dataframe.iloc[start:start+2][['date', 'trend']])  # Mostrar las primeras 3 filas de cada bloque
+        '''
         
         # ------------------------------------
         # Momentum Indicators
@@ -410,7 +459,7 @@ class PJStrategy(IStrategy):
                 dataframe['best_bid'] = ob['bids'][0][0]
                 dataframe['best_ask'] = ob['asks'][0][0]
         """
-        print("🔍 DataFrame después de agregar indicadores:\n", dataframe.iloc[190:200][['date', 'sar', 'tema', 'trend']].head(10))
+        print("🔍 DataFrame después de agregar indicadores:\n", dataframe.iloc[190:200][['date', 'sar', 'tema', 'trend']])
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -427,6 +476,7 @@ class PJStrategy(IStrategy):
                 & (dataframe["tema"] <= dataframe["bb_middleband"])  # Guard: tema below BB middle
                 & (dataframe["tema"] > dataframe["tema"].shift(1))  # Guard: tema is raising
                 & (dataframe["volume"] > 0)  # Make sure Volume is not 0
+                & (dataframe["trend"] == 'positive')  # Guard: tendencia positiva
             ),
             "enter_long",
         ] = 1
@@ -438,6 +488,7 @@ class PJStrategy(IStrategy):
                 & (dataframe["tema"] > dataframe["bb_middleband"])  # Guard: tema above BB middle
                 & (dataframe["tema"] < dataframe["tema"].shift(1))  # Guard: tema is falling
                 & (dataframe["volume"] > 0)  # Make sure Volume is not 0
+                & (dataframe["trend"] == 'negative')  # Guard: tendencia negativa
             ),
             "enter_short",
         ] = 1
@@ -474,5 +525,38 @@ class PJStrategy(IStrategy):
             ),
             "exit_short",
         ] = 1
+
+        # **NUEVA CONDICIÓN**: Cierre de operaciones si cambia la tendencia y hay profit
+        if "trend" in dataframe.columns:
+            dataframe["trend_shift"] = dataframe["trend"] != dataframe["trend"].shift(1)  # Detectar cambios en tendencia
+
+            # Verificar si la estrategia tiene trades activos
+            if self.dp and self.dp.runmode.value in ("live", "dry_run"):  
+                active_trades = self.dp.get_trades(metadata["pair"])  # Obtener operaciones activas para el par
+
+                for trade in active_trades:
+                    open_price = trade.open_rate  # Precio al que se abrió la operación
+                    current_price = dataframe["close"]  # Precio actual de la vela
+                    profit = (current_price - open_price) / open_price  # Cálculo del profit en porcentaje
+
+                    # Cierre en largo si la tendencia cambia a negativa y hay profit
+                    dataframe.loc[
+                        (
+                            (dataframe["trend_shift"])  # Cambio en tendencia
+                            & (dataframe["trend"] == "negative")  # Nueva tendencia negativa
+                            & (profit > 0)  # Solo cerrar si hay ganancia
+                        ),
+                        "exit_long",
+                    ] = 1
+
+                    # Cierre en corto si la tendencia cambia a positiva y hay profit
+                    dataframe.loc[
+                        (
+                            (dataframe["trend_shift"])  # Cambio en tendencia
+                            & (dataframe["trend"] == "positive")  # Nueva tendencia positiva
+                            & (profit < 0)  # Solo cerrar si hay ganancia en short (precio cae)
+                        ),
+                        "exit_short",
+                    ] = 1
 
         return dataframe

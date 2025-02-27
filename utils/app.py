@@ -1,6 +1,8 @@
 import os
 import re
 import json
+from datetime import datetime  # ✅ Importar datetime antes de usarlo
+
 from dotenv import load_dotenv
 from langchain_community.utilities import GoogleSerperAPIWrapper
 from langchain_openai import ChatOpenAI
@@ -48,7 +50,7 @@ tools = [
 @dataclass
 class AgentState:
     query: str
-    date: str 
+    date: datetime 
     response: str
 
 # Creamos un grafo de estados usando LangGraph y le indicamos el tipo de estado que maneja.
@@ -72,7 +74,7 @@ def validar_activo(state: AgentState) -> AgentState:
 
         # Validar fecha
         try:
-            datetime.strptime(date, "%Y-%m-%d %H:%M:%S")  # Verifica que la fecha tenga el formato correcto
+            date = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")  # Verifica que la fecha tenga el formato correcto
         except ValueError:
             print(f"❌ Fecha inválida: {date}")
             date = input("Ingrese una fecha válida en formato YYYY-MM-DD HH:MM:SS : ").strip()
@@ -91,30 +93,46 @@ def validar_activo(state: AgentState) -> AgentState:
 # ----------
 # Nodo 2: Ejecutar búsqueda de noticias en la web
 # ----------
-from datetime import datetime
+import os
+import http.client
+import json
 
 def buscar_noticias(state: AgentState) -> AgentState:
-    # Obtener la fecha actual en formato YYYY-MM-DD
-    fecha_actual = state.date
+    # Convertimos la fecha al formato MM/DD/YYYY para la API de Serper
+    fecha_formateada = state.date.strftime('%m/%d/%Y')
 
-    # Obtener una fecha específica (por ejemplo, 1 de enero de 2025)
-    # fecha_actual = datetime(2025, 1, 1).strftime('%Y-%m-%d')
+    # Crear el payload con la consulta y el parámetro tbs para la fecha específica
+    payload = json.dumps({
+        "q": state.query,
+        "tbs": f"cdr:1,cd_min:{fecha_formateada},cd_max:{fecha_formateada}"
+    })
 
-    # Incluir la fecha en la búsqueda para obtener noticias recientes
-    query = f"Noticias recientes sobre {state.query} {fecha_actual}"
-    
-    print(f"🔍 Buscando en la web con SERPER: {query}")
+    headers = {
+        'X-API-KEY': os.environ["SERPER_API_KEY"],
+        'Content-Type': 'application/json'
+    }
 
-    # Llamar a SERPER con la consulta que incluye la fecha
-    search_results = search.run(query)
+    # Realizar la solicitud HTTP a la API de Serper
+    conn = http.client.HTTPSConnection("google.serper.dev")
+    conn.request("POST", "/news", payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+    conn.close()
 
-    # Verificar si SERPER devuelve resultados
-    if not search_results:
-        print("⚠ SERPER no devolvió ningún resultado.")
+    # Decodificar la respuesta JSON
+    search_results = json.loads(data.decode("utf-8"))
+
+    # Procesar la respuesta y actualizar el estado
+    if not search_results.get('news', []):
+        response = "⚠ No se encontraron noticias para la fecha especificada."
     else:
-        print("📌 Resultados obtenidos de SERPER:\n", search_results)
+        response = "\n📌 Resultados obtenidos de Serper:\n"
+        for noticia in search_results['news']:
+            response += f"- {noticia['title']} ({noticia['date']})\n"
+            response += f"  Fuente: {noticia['source']}\n"
+            response += f"  Enlace: {noticia['link']}\n\n"
 
-    return AgentState(query=state.query, date=state.date, response=search_results)
+    return AgentState(query=state.query, date=state.date, response=response)
 
 
 # ----------
@@ -280,4 +298,9 @@ def obtener_sentimiento(query: str, date: str) -> dict:
         print("⚠ Error: No se encontró 'tendencia' en la respuesta.")
         print("Resultado de la tendencia: ⚖ Neutral")
         return {"tendencia": "⚖ Neutral"}  # Valor por defecto en caso de error
+    
+
+def decir_hola():
+    print ("Hola mi carnal, que dice la chaviza")
+    return []
 
