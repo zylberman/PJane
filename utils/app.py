@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import http.client
 from datetime import datetime  # ✅ Importar datetime antes de usarlo
 
 from dotenv import load_dotenv
@@ -11,12 +12,18 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import Tool
 from dataclasses import dataclass
 from langgraph.graph import END, StateGraph, START  # Importar definiciones del grafo
+from groq import Groq
 
 # Cargar variables de entorno desde un archivo .env
 load_dotenv()
 
 # Establecer la variable de entorno para la clave de la API de Serper
 os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+
+# Configurar el cliente de Groq
+client = Groq(
+    api_key=os.getenv("GROQ_API_KEY"),
+)
 
 # Configuración de dos modelos de lenguaje que se ejecutan en local a través de LM Studio.
 # openai_api_base indica la dirección base del servidor donde corre el modelo
@@ -32,6 +39,50 @@ llm_deep_seek = ChatOpenAI(
     openai_api_key="lm-studio",  
     model_name="deepseek-r1-distill-llama-8b"
 )
+
+# Función para enviar una consulta a Groq
+import json
+
+def chat_with_groq(prompt):
+    """
+    Envía un prompt a Groq y obtiene la respuesta en formato JSON.
+    """
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Eres un asistente especializado en análisis de sentimientos del mercado. "
+                               "Devuelve siempre la respuesta en formato JSON estricto con la siguiente estructura:\n"
+                               "{"
+                               "  \"resumen\": \"Descripción general...\","
+                               "  \"sentimientos\": ["
+                               "    {\"noticia\": \"...\", \"sentimiento\": \"positivo|negativo|neutral\"},"
+                               "    {\"noticia\": \"...\", \"sentimiento\": \"positivo|negativo|neutral\"}"
+                               "  ]"
+                               "}"
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model="llama-3.3-70b-versatile",  # Asegúrate de que este modelo esté disponible
+        )
+
+        # ✅ Acceder al contenido de la respuesta correctamente
+        respuesta_texto = chat_completion.choices[0].message.content  
+
+        # ✅ Intentar convertir la respuesta a JSON
+        respuesta_json = json.loads(respuesta_texto)
+        return respuesta_json
+
+    except json.JSONDecodeError:
+        return {"error": "La respuesta de Groq no es un JSON válido", "raw_text": respuesta_texto}
+
+    except Exception as e:
+        return {"error": str(e)}
+
 
 # Inicializamos una instancia de la herramienta de búsqueda con Google Serper
 search = GoogleSerperAPIWrapper()
@@ -93,10 +144,6 @@ def validar_activo(state: AgentState) -> AgentState:
 # ----------
 # Nodo 2: Ejecutar búsqueda de noticias en la web
 # ----------
-import os
-import http.client
-import json
-
 def buscar_noticias(state: AgentState) -> AgentState:
     # Convertimos la fecha al formato MM/DD/YYYY para la API de Serper
     fecha_formateada = state.date.strftime('%m/%d/%Y')
@@ -163,12 +210,24 @@ def analizar_noticias(state: AgentState) -> AgentState:
     {noticias_texto}
     """
 
-    # 3. Invocar al LLM
-    respuesta_modelo = llm_qwen.invoke([HumanMessage(content=prompt)])
-    print("Respuesta de LLM (raw):", respuesta_modelo.content)
+    # 3. Invocar al agente encargado de resumir las noticias
+    # Obtener la respuesta del modelo Qwen
+    # respuesta_qwen = llm_qwen.invoke([HumanMessage(content=prompt)]).content  # Qwen ya devuelve JSON válido
+    # print("📊 Respuesta de Qwen (JSON):", respuesta_qwen)
+
+    # Obtener la respuesta del modelo Groq
+    respuesta_groq = chat_with_groq(prompt)  # Ahora devuelve un JSON estructurado
+    print("📊 Respuesta de Groq (JSON):", respuesta_groq)
+
+    respuesta_modelo = respuesta_groq
+
 
     # 4. Limpiar la respuesta del modelo para eliminar el bloque de código Markdown
-    respuesta_limpia = respuesta_modelo.content.strip("```json\n").strip("\n```")
+    if isinstance(respuesta_modelo, dict) and "raw_text" in respuesta_modelo:
+        respuesta_limpia = respuesta_modelo["raw_text"].strip("```json\n").strip("\n```")
+    else:
+        respuesta_limpia = json.dumps(respuesta_modelo)  # Convertir a string en caso de error
+
 
     # 5. Parsear la respuesta JSON
     try:

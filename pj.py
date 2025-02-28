@@ -192,7 +192,7 @@ class PJStrategy(IStrategy):
             dataframe['date'] = pd.to_datetime(dataframe['date'], errors='coerce')
 
         # **Hacer que el tamaño del bloque sea configurable**
-        trend_block_hours = 16  # ⬅️ Tamaño del bloque en horas
+        trend_block_hours = 24  # ⬅️ Tamaño del bloque en horas
         timeframe_minutes = timeframe_to_minutes(self.timeframe)  
         rows_per_block = (trend_block_hours * 60) // timeframe_minutes  # Conversión a filas
 
